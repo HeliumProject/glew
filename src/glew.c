@@ -9535,15 +9535,106 @@ static GLboolean _glewInit_GL_WIN_swap_hint (GLEW_CONTEXT_ARG_DEF_INIT)
 
 /* ------------------------------------------------------------------------- */
 
+#ifdef GL_VERSION_3_0
+#include <stdlib.h>
+#ifndef GLEW_MX
+static
+#endif
+/* This is a relatively expensive function.  Create a single extensions
+    string while maintaining reentrancy.  Don't call this often.
+    Returned GLubyte* is the responsibility of the caller to free(). */
+const GLubyte * glewGetExtensionList()
+{
+  GLint numExtensions;
+  GLubyte *extensionList;
+  GLubyte *extensionListItr;
+  size_t extensionListStrlen;
+  size_t i;
+
+  /* Ensure glGetStringi is defined */
+  if (!glGetStringi)
+  {
+    return NULL;
+  }
+
+  /* Get extension count */
+  glGetIntegerv(GL_NUM_EXTENSIONS, &numExtensions);
+  if (numExtensions <= 0)
+  {
+    return NULL;
+  }
+
+  /* Get length of all extensions */
+  extensionListStrlen = (numExtensions - 1) + 1; /* For space delimiters, plus null terminator */
+  for (i = 0; i < numExtensions; ++i)
+  {
+    const GLubyte *extension = glGetStringi(GL_EXTENSIONS, (GLuint)i);
+    if (extension)
+    {
+      extensionListStrlen += strlen((const char*)extension);
+    }
+  }
+
+  /* Build a master extension string containing all extensions, delimeted by spaces */
+  extensionList = (GLubyte*)malloc(sizeof(GLubyte) * extensionListStrlen);
+  extensionListItr = extensionList;
+  for (i = 0; i < numExtensions; ++i)
+  {
+    const GLubyte *extension;
+    size_t extensionStrlen;
+    extension = glGetStringi(GL_EXTENSIONS, (GLuint)i);
+    if (extension)
+    {
+      extensionStrlen = strlen((const char*)extension);
+      strncpy((char*)extensionListItr, (const char*)extension, extensionListStrlen);
+      extensionListItr += extensionStrlen;
+      extensionListStrlen -= extensionStrlen;
+
+      *extensionListItr = (GLubyte)' ';
+      ++extensionListItr;
+      extensionListStrlen -= 1;
+    }
+  }
+  *(extensionListItr-1) = '\0';
+
+  return extensionList;
+}
+#endif /* GL_VERSION_3_0 */
+
+/* ------------------------------------------------------------------------- */
+
 GLboolean GLEWAPIENTRY glewGetExtension (const char* name)
-{    
+{
+  GLboolean found;
   const GLubyte* start;
   const GLubyte* end;
-  start = (const GLubyte*)glGetString(GL_EXTENSIONS);
+  int shouldFree;
+  start = 0;
+#ifdef GL_VERSION_3_0
+  if (GLEW_VERSION_3_0)
+  {
+    start = glewGetExtensionList();
+    shouldFree = 1;
+  }
+#endif /* GL_VERSION_3_0 */
   if (start == 0)
+  {
+    start = (const GLubyte*)glGetString(GL_EXTENSIONS);
+    shouldFree = 0;
+  }
+  if (start == 0)
+  {
     return GL_FALSE;
+  }
   end = start + _glewStrLen(start);
-  return _glewSearchExtension(name, start, end);
+  found = _glewSearchExtension(name, start, end);
+#ifdef GL_VERSION_3_0
+  if (shouldFree)
+  {
+    free((void*)start);
+  }
+#endif /* GL_VERSION_3_0 */
+  return found;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -9558,6 +9649,8 @@ GLenum GLEWAPIENTRY glewContextInit (GLEW_CONTEXT_ARG_DEF_LIST)
   GLint major, minor;
   const GLubyte* extStart;
   const GLubyte* extEnd;
+  int shouldFree;
+  extStart = 0;
   /* query opengl version */
   s = glGetString(GL_VERSION);
   dot = _glewStrCLen(s, '.');
@@ -9598,10 +9691,28 @@ GLenum GLEWAPIENTRY glewContextInit (GLEW_CONTEXT_ARG_DEF_LIST)
     CONST_CAST(GLEW_VERSION_1_1)   = GLEW_VERSION_1_2   == GL_TRUE || ( major == 1 && minor >= 1 ) ? GL_TRUE : GL_FALSE;
   }
 
+#ifdef GL_VERSION_3_0
+  /* Define glGetStringi if available */
+  glGetStringi = (PFNGLGETSTRINGIPROC)glewGetProcAddress((const GLubyte*)"glGetStringi");
+#endif
+
   /* query opengl extensions string */
-  extStart = glGetString(GL_EXTENSIONS);
+#ifdef GL_VERSION_3_0
+  if (GLEW_VERSION_3_0)
+  {
+    extStart = glewGetExtensionList();
+    shouldFree = 1;
+  }
+#endif /* GL_VERSION_3_0 */
   if (extStart == 0)
+  {
+    extStart = glGetString(GL_EXTENSIONS);
+    shouldFree = 0;
+  }
+  if (extStart == 0)
+  {
     extStart = (const GLubyte*)"";
+  }
   extEnd = extStart + _glewStrLen(extStart);
 
   /* initialize extensions */
@@ -11403,6 +11514,13 @@ GLenum GLEWAPIENTRY glewContextInit (GLEW_CONTEXT_ARG_DEF_LIST)
   CONST_CAST(GLEW_WIN_swap_hint) = _glewSearchExtension("GL_WIN_swap_hint", extStart, extEnd);
   if (glewExperimental || GLEW_WIN_swap_hint) CONST_CAST(GLEW_WIN_swap_hint) = !_glewInit_GL_WIN_swap_hint(GLEW_CONTEXT_ARG_VAR_INIT);
 #endif /* GL_WIN_swap_hint */
+
+#ifdef GL_VERSION_3_0
+  if (shouldFree && extStart)
+  {
+    free((void*)extStart);
+  }
+#endif /* GL_VERSION_3_0 */
 
   return GLEW_OK;
 }
